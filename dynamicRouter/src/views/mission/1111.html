@@ -1,0 +1,323 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>三维地球 - 经纬度轨迹图</title>
+    <style>
+        body { margin: 0; overflow: hidden; font-family: 'Microsoft YaHei', sans-serif; }
+        #info {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            color: white;
+            background: rgba(0,0,0,0.7);
+            padding: 12px 20px;
+            border-radius: 8px;
+            pointer-events: none;
+            z-index: 10;
+            font-size: 14px;
+            backdrop-filter: blur(5px);
+            z-index: 20;
+        }
+        #controls-hint {
+            position: absolute;
+            bottom: 20px;
+            left: 20px;
+            color: rgba(255,255,255,0.6);
+            background: rgba(0,0,0,0.5);
+            padding: 6px 12px;
+            border-radius: 6px;
+            font-size: 12px;
+            pointer-events: none;
+            z-index: 20;
+        }
+        .title {
+            position: absolute;
+            top: 20px;
+            right: 20px;
+            color: white;
+            background: rgba(0,0,0,0.6);
+            padding: 8px 15px;
+            border-radius: 8px;
+            font-size: 12px;
+            pointer-events: none;
+            z-index: 20;
+            text-align: right;
+        }
+    </style>
+</head>
+<body>
+    <div id="info">
+        🌍 三维地球 | 红色小球: 数据点 | 蓝色曲线: 轨迹 (闭合)
+    </div>
+    <div class="title">
+        经度范围: -180° ~ 180°<br>
+        纬度范围: -75° ~ 87.5°
+    </div>
+    <div id="controls-hint">
+        🖱️ 鼠标拖拽旋转视角 | 右键平移 | 滚轮缩放
+    </div>
+
+    <!-- 引入 Three.js 核心库及扩展 -->
+    <script type="importmap">
+        {
+            "imports": {
+                "three": "https://unpkg.com/three@0.128.0/build/three.module.js",
+                "three/addons/": "https://unpkg.com/three@0.128.0/examples/jsm/"
+            }
+        }
+    </script>
+
+    <script type="module">
+        import * as THREE from 'three';
+        import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+        import { CSS2DRenderer, CSS2DObject } from 'three/addons/renderers/CSS2DRenderer.js';
+
+        // --- 初始化场景、相机、渲染器 ---
+        const scene = new THREE.Scene();
+        scene.background = new THREE.Color(0x050b1a); // 星空深蓝色背景
+        scene.fog = new THREE.FogExp2(0x050b1a, 0.0003); // 轻微雾效
+
+        // 透视相机 (视角, 宽高比, 近平面, 远平面)
+        const camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.1, 2000);
+        camera.position.set(0, 0, 350); // 初始相机位置
+        camera.lookAt(0, 0, 0);
+
+        const renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.shadowMap.enabled = false; // 本例不需要阴影提升性能
+        renderer.setPixelRatio(window.devicePixelRatio);
+        document.body.appendChild(renderer.domElement);
+
+        // CSS2渲染文字标签
+        const labelRenderer = new CSS2DRenderer();
+        labelRenderer.setSize(window.innerWidth, window.innerHeight);
+        labelRenderer.domElement.style.position = 'absolute';
+        labelRenderer.domElement.style.top = '0px';
+        labelRenderer.domElement.style.left = '0px';
+        labelRenderer.domElement.style.pointerEvents = 'none';
+        document.body.appendChild(labelRenderer.domElement);
+
+        // --- 轨道控制 (支持交互) ---
+        const controls = new OrbitControls(camera, renderer.domElement);
+        controls.enableDamping = true;      // 惯性效果
+        controls.dampingFactor = 0.05;
+        controls.rotateSpeed = 1.0;
+        controls.zoomSpeed = 1.2;
+        controls.panSpeed = 0.8;
+        controls.enableZoom = true;
+        controls.enablePan = true;
+        controls.autoRotate = false;
+        controls.target.set(0, 0, 0);
+        
+        // --- 辅助: 添加星空背景 (粒子系统 或 简单星空贴图，这里用大量粒子简单模拟) ---
+        const starGeometry = new THREE.BufferGeometry();
+        const starCount = 2000;
+        const starPositions = new Float32Array(starCount * 3);
+        for (let i = 0; i < starCount; i++) {
+            starPositions[i*3] = (Math.random() - 0.5) * 2000;
+            starPositions[i*3+1] = (Math.random() - 0.5) * 1000;
+            starPositions[i*3+2] = (Math.random() - 0.5) * 500 - 200;
+        }
+        starGeometry.setAttribute('position', new THREE.BufferAttribute(starPositions, 3));
+        const starMaterial = new THREE.PointsMaterial({ color: 0xffffff, size: 0.5, transparent: true, opacity: 0.7 });
+        const stars = new THREE.Points(starGeometry, starMaterial);
+        scene.add(stars);
+        
+        // --- 地球纹理加载 ---
+        // 使用高清地球贴图 (来自 three.js 示例常用的贴图，确保跨域可用)
+        const earthMap = 'https://threejs.org/examples/textures/planets/earth_atmos_2048.jpg';
+        const earthSpecularMap = 'https://threejs.org/examples/textures/planets/earth_specular_2048.jpg';
+        const earthNormalMap = 'https://threejs.org/examples/textures/planets/earth_normal_2048.jpg';
+        const cloudMap = 'https://threejs.org/examples/textures/planets/earth_clouds_1024.png';
+        
+        // 地球网格
+        const earthGeometry = new THREE.SphereGeometry(100, 128, 128);
+        const earthMaterial = new THREE.MeshPhongMaterial({
+            map: new THREE.TextureLoader().load(earthMap),
+            specularMap: new THREE.TextureLoader().load(earthSpecularMap),
+            specular: new THREE.Color('grey'),
+            shininess: 5,
+            normalMap: new THREE.TextureLoader().load(earthNormalMap),
+            normalScale: new THREE.Vector2(0.8, 0.8)
+        });
+        const earth = new THREE.Mesh(earthGeometry, earthMaterial);
+        scene.add(earth);
+        
+        // 云层效果
+        const cloudGeometry = new THREE.SphereGeometry(100.5, 128, 128);
+        const cloudMaterial = new THREE.MeshPhongMaterial({
+            map: new THREE.TextureLoader().load(cloudMap),
+            transparent: true,
+            opacity: 0.15,
+            blending: THREE.AdditiveBlending
+        });
+        const clouds = new THREE.Mesh(cloudGeometry, cloudMaterial);
+        scene.add(clouds);
+        
+        // --- 经纬度转三维坐标 (半径略微大于地球，让点浮在地球表面之上) ---
+        const RADIUS = 101.5; // 比地球半径100稍大，避免穿插
+        
+        function lngLatToVector3(lng, lat, radius = RADIUS) {
+            const phi = (90 - lat) * Math.PI / 180;
+            const theta = lng * Math.PI / 180;
+            const x = radius * Math.sin(phi) * Math.cos(theta);
+            const y = radius * Math.cos(phi);
+            const z = radius * Math.sin(phi) * Math.sin(theta);
+            return new THREE.Vector3(x, y, z);
+        }
+        
+        // --- 原始数据 (经度, 纬度) ---
+       const pointsData = [
+    // 上半圆 (北半球，从经度 0° 开始顺时针)
+    [0.0, 60.0], [30.0, 70.0], [60.0, 75.0], [90.0, 78.0], [120.0, 78.0],
+    [150.0, 75.0], [180.0, 70.0], [210.0, 60.0], [240.0, 45.0], [270.0, 25.0],
+    [300.0, 0.0], [330.0, -25.0], [0.0, -45.0], [30.0, -60.0], [60.0, -70.0],
+    [90.0, -75.0], [120.0, -75.0], [150.0, -70.0], [180.0, -60.0], [210.0, -45.0],
+    [240.0, -25.0], [270.0, 0.0], [300.0, 25.0], [330.0, 45.0], [360.0, 60.0]
+];
+        
+        // 存储三维坐标点 (用于连线和添加小球)
+        const points3d = pointsData.map(p => lngLatToVector3(p[0], p[1]));
+        
+        // --- 1. 添加红色小球体 (数据点) ---
+        const sphereGeometry = new THREE.SphereGeometry(1.2, 24, 24);
+        const sphereMaterial = new THREE.MeshStandardMaterial({
+            color: 0xff3366,
+            emissive: 0x441122,
+            roughness: 0.3,
+            metalness: 0.1
+        });
+        
+        points3d.forEach(pos => {
+            const sphere = new THREE.Mesh(sphereGeometry, sphereMaterial);
+            sphere.position.copy(pos);
+            scene.add(sphere);
+        });
+        
+        // --- 2. 添加 CSS2D 文字标签 (显示部分主要点的经纬度，避免过于拥挤) ---
+        // 每隔几个点显示一个标签 (也可以全部显示，但会密集，这里显示部分关键点)
+        const labelDivs = [];
+        pointsData.forEach((point, idx) => {
+            // 每隔3个点显示一个标签，且首尾必显
+            if (idx % 3 === 0 || idx === 0 || idx === pointsData.length - 1 || 
+                Math.abs(point[1]) > 80) { // 高纬度也显示
+                const div = document.createElement('div');
+                div.textContent = `${point[0].toFixed(0)}°,${point[1].toFixed(0)}°`;
+                div.style.color = '#ffdd99';
+                div.style.fontSize = '12px';
+                div.style.fontWeight = 'bold';
+                div.style.textShadow = '1px 1px 0px black';
+                div.style.backgroundColor = 'rgba(0,0,0,0.6)';
+                div.style.padding = '2px 6px';
+                div.style.borderRadius = '12px';
+                div.style.border = '1px solid rgba(255,100,100,0.5)';
+                div.style.whiteSpace = 'nowrap';
+                div.style.fontFamily = 'sans-serif';
+                div.style.backdropFilter = 'blur(4px)';
+                const label = new CSS2DObject(div);
+                label.position.copy(lngLatToVector3(point[0], point[1], RADIUS + 1.2));
+                scene.add(label);
+                labelDivs.push(label);
+            }
+        });
+        
+        // --- 3. 绘制蓝色轨迹线 (LineSegments 或 Line, 使用 Line 并让曲线平滑通过每个点) ---
+        // 为了更好的视觉效果，使用 CatmullRomCurve3 生成平滑曲线通过所有点 (保持过点)
+        const curve = new THREE.CatmullRomCurve3(points3d);
+        curve.curveType = 'centripetal';   // 向心型，让曲线更贴合
+        curve.closed = true;               // 闭合曲线 (首尾相连)
+        
+        // 生成曲线上的细分点，用于绘制平滑线条
+        const curvePointsCount = 500;
+        const curvePoints = curve.getPoints(curvePointsCount);
+        
+        const lineGeometry = new THREE.BufferGeometry();
+        const vertices = [];
+        curvePoints.forEach(p => {
+            vertices.push(p.x, p.y, p.z);
+        });
+        lineGeometry.setAttribute('position', new THREE.BufferAttribute(new Float32Array(vertices), 3));
+        
+        const lineMaterial = new THREE.LineBasicMaterial({ color: 0x33aaff, linewidth: 2 }); // linewidth not supported everywhere, but color works
+        const trailLine = new THREE.Line(lineGeometry, lineMaterial);
+        scene.add(trailLine);
+        
+        // 额外添加发光点效果 (在原始点位置添加光晕或者小粒子，增强视觉效果)
+        const glowGeometry = new THREE.BufferGeometry();
+        const glowPositions = [];
+        points3d.forEach(p => {
+            glowPositions.push(p.x, p.y, p.z);
+        });
+        glowGeometry.setAttribute('position', new THREE.BufferAttribute(new Float32Array(glowPositions), 3));
+        const glowMaterial = new THREE.PointsMaterial({ color: 0xff6699, size: 0.8, transparent: true, blending: THREE.AdditiveBlending });
+        const glowPoints = new THREE.Points(glowGeometry, glowMaterial);
+        scene.add(glowPoints);
+        
+        // --- 添加大气层效果 (简单光晕) ---
+        const atmosGeometry = new THREE.SphereGeometry(102, 64, 64);
+        const atmosMaterial = new THREE.MeshPhongMaterial({
+            color: 0x88aaff,
+            transparent: true,
+            opacity: 0.12,
+            side: THREE.BackSide
+        });
+        const atmosphere = new THREE.Mesh(atmosGeometry, atmosMaterial);
+        scene.add(atmosphere);
+        
+        // --- 光源系统 (使地球立体) ---
+        // 环境光
+        const ambientLight = new THREE.AmbientLight(0x404060);
+        scene.add(ambientLight);
+        // 主光源方向光
+        const dirLight = new THREE.DirectionalLight(0xffffff, 1.2);
+        dirLight.position.set(50, 100, 30);
+        scene.add(dirLight);
+        // 补光
+        const fillLight = new THREE.PointLight(0x4466cc, 0.3);
+        fillLight.position.set(-30, 20, 40);
+        scene.add(fillLight);
+        // 背光暖色
+        const backLight = new THREE.PointLight(0xffaa66, 0.25);
+        backLight.position.set(0, 20, -80);
+        scene.add(backLight);
+        
+        // 简单辅助：在北极和南极加微弱的点光源?
+        // 为了让红色小球更有质感，再加一个小光源跟随相机? 不需要
+        
+        // --- 简单动画 (云层缓慢旋转) ---
+        let time = 0;
+        
+        // --- 辅助: 添加一个外圈线框 (可选 经纬网格，但不加了保持干净) ---
+        
+        // --- 渲染循环 ---
+        function animate() {
+            requestAnimationFrame(animate);
+            // 云层缓慢自转
+            clouds.rotation.y += 0.0008;
+            // 星星轻微自转，效果不大但有趣
+            stars.rotation.y += 0.0002;
+            stars.rotation.x += 0.0001;
+            
+            controls.update(); // 更新轨道控制
+            renderer.render(scene, camera);
+            labelRenderer.render(scene, camera);
+        }
+        
+        animate();
+        
+        // 窗口适配
+        window.addEventListener('resize', onWindowResize, false);
+        function onWindowResize() {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            labelRenderer.setSize(window.innerWidth, window.innerHeight);
+        }
+        
+        // 控制台输出
+        console.log('三维地球已启动，共加载', pointsData.length, '个轨迹点');
+    </script>
+</body>
+</html>
